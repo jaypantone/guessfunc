@@ -453,7 +453,7 @@ SPHPS := proc(F, power, n, p, tolerance:= 10, shortcircuit := true, dropbyatmost
     fi;
 
     # now for the main stuff
-    if power > 1(*) and kappa > 1*) then
+    if power > 1(* and kappa > 1*) then
 
     	# run on the first half of the problem!
     	#kappa_bar := min(sigma,max(ceil(kappa/2),kappa-dropbyatmost));
@@ -508,25 +508,3 @@ SPHPS := proc(F, power, n, p, tolerance:= 10, shortcircuit := true, dropbyatmost
 
     return [-1, power1, power2];
 end:
-
-(*
-#read "/Users/jaypantone/Dropbox/Research/Active/2015-28-Chord-Diagrams/MinLengthChordDiagrams/build/classes/minlengthchorddiagrams/Min-Length-6--5000-terms.txt";
-read "/home/jay/chord-diagrams/Min-Length-6--5000-terms.txt";
-f := add(L[i]*x^(i-1),i=1..nops(L)):
-test := [1, seq(diff(f,[x$i]),i=0..10)]:
-
-tt := time[real](): ans := SPHPS_wrapper(map(modp1, map(ConvertIn,test,x), 7919), 997, [200$12], 7919, 10, true, 50): time[real]() - tt;
-#ABC := map(t -> modp1(ConvertOut(t,x),7919), ans[1][1]):
-XYZ := seq(ldegree(expand(add(test[i]*map(t -> modp1(ConvertOut(t,x),7919), ans[1][j])[i] mod 7919,i=1..nops(test))) mod 7919,x),j=1..12);
-
-
-
-#cata := add(binomial(2*n,n)/(n+1)*x^n,n=0..100);
-#test := [1, cata, convert(series(cata^2,x,101),polynom)];
-#SPHPS(test, 4, 4, [1,1,1], 7919);
-
-#map(t -> modp1(ConvertOut(t,x),7919), %);
-#SPHPS(test, 5, 8, [1,1,1], 7919);
-*)
-
-

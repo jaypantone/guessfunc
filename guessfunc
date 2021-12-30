@@ -607,7 +607,7 @@ guessfunc := proc(data)
 	local mind, maxd, minm, maxm, mink, maxk, minl, maxl, minweight, maxweight, output, tolerance, skimmod, egf, rev, verbose, modsolve, i, newdata, tt, terms_as_func, rev_series, legal_words, st, donesofar, todo, trial, ws_string, try_to_solve, lsort, pretty_version, resumeat, ret_dat, modp_prime, newdata_modp, new_bl, tts_store;
 	global solvertime, totalsetuptime, powtime, difftime, prodtime, numthisprods, numthispows, numthisdiffs;
 
-	## HACK HACK HACK
+	## hacky
 	if data[2..] = [0$(nops(data)-1)] and nops(data) > 10 then
 		return F(z) - data[1];
 	fi;
@@ -663,7 +663,7 @@ guessfunc := proc(data)
 			
 		printf("======================================================\n\n");
 
-		printf("For examples, see the user manual at: [currently non-existant]\n\n");
+		#printf("For examples, see the user manual at: [currently non-existant]\n\n");
 		return();
 	fi;
 	
