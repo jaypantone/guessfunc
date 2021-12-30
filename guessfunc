@@ -1,0 +1,1279 @@
+kernelopts(printbytes=false):
+
+read "b-l-method.txt";
+
+with(ArrayTools):
+with(ListTools):
+with(SolveTools):
+
+solvertime := 0:
+powtime := 0:
+prodtime := 0:
+difftime := 0:
+numthisprods := 0:
+numthispows := 0:
+numthisdiffs := 0:
+countpowtime := 1:
+
+#------------------------------------------------------------------------
+#
+#   GuessFunc: A Maple package to guess implicit equations
+#                 satisfied by a given sequence of terms of an unknown
+#                 generating function.
+#
+#   Version: 0.98
+#
+#   Created: March 18, 2016
+#      This version: April 10, 2019
+#
+#   Written by:
+#      Jay Pantone (Marquette University)
+#
+#------------------------------------------------------------------------
+
+printf("#------------------------------------------------------------------------#");
+printf("\n#  GuessFunc: A Maple package to conjecture generating functions.        #\n");
+printf("#   version 0.98                                                         #\n");
+printf("#                                                                        #\n");
+printf("#  Written by:                                                           #\n");
+printf("#      Jay Pantone  (Marquette University)                               #\n");
+printf("#                                                                        #\n");
+printf("#  For detailed information, run \'guessfunc();\'.                         #\n");
+printf("#------------------------------------------------------------------------#\n\n");
+
+
+
+#  /==============================================================\  #
+# /================================================================\ #
+# |					         Term Building  				       | #
+# \================================================================/ #
+#  \===============================================================/ #
+
+term_weight := proc(m,k,d,l,tol)
+	return (d+1)*(1+add(add(binomial(k+1,j)*binomial(t-1,j-1),j=1..l), t=1..m))+tol+k;
+end:
+
+build_words := proc(num_terms, tolerance, mind, maxd, minm, maxm, mink, maxk, minl, maxl, skim_mod)
+# 	option autocompile;
+	local all_words, curm, curk, curd, curl, added_one, tw, lrange_start, lrange_end, added_one_deeper, added_one_third, made_into_loop, holder, word;
+	
+	all_words := Array([]);
+	
+	curm := max(minm, 1);
+	curk := max(mink, 0);
+	curd := max(mind, 1);
+	
+	for curk from mink to maxk do
+# 		printf("k = %a\n",curk);
+		
+		added_one_third := false;
+		made_into_loop := false;
+	
+		for curm from minm to maxm do
+# 			printf("\tm = %a\n",curm);
+			
+			if minl = -1 then
+				lrange_start := min(curm, curk+1);
+				lrange_end := min(curm, curk+1);
+			else
+				lrange_start := max(minl, 1);
+				lrange_end := min(maxl, min(curk+1, curm));
+			fi;
+		
+			added_one_deeper := false;
+			
+			for curl from lrange_start to lrange_end do
+# 				printf("\t\tl = %a\n",curl);
+			
+				added_one := false;
+				for curd from mind to maxd do
+					made_into_loop := true;
+# 					printf("\t\t\td = %a\n",curd);
+
+					tw := term_weight(curm, curk, curd, curl, tolerance);
+# 					printf("\t\t\t\t[%a, %a, %a, %a]: %a\n", curm, curk, curl, curd, tw);
+					if tw <= num_terms then
+						if skim_mod <> -1 and (skim_mod = 0 or (curd mod skim_mod = 0)) then
+							all_words := array_append(all_words, [curm, curk, curd, curl, tw]);
+							added_one := true;
+							added_one_deeper := true;
+							added_one_third := true;
+						fi;
+					else
+						if (skim_mod = -1 and curd > mind) or (skim_mod > 0 and (curd-1 mod skim_mod) <> 0 and curd > 0 and term_weight(curm, curk, curd-1, curl, tolerance) <= num_terms) then
+							all_words := array_append(all_words, [curm, curk, curd-1, curl, term_weight(curm, curk, curd-1, curl, tolerance)]);
+							added_one := true;
+							added_one_deeper := true;
+							added_one_third := true;
+						fi;
+						break;
+					fi;
+				
+				od;
+			
+				if not added_one and made_into_loop then break; fi;
+			
+			od;
+			
+			if not added_one_deeper and made_into_loop then break; fi;
+			
+		od;
+		
+		if not added_one_third and made_into_loop then break; fi;
+		
+	od;
+	
+	if NumElems(all_words) > 0 then
+		if skim_mod <> -1 then
+			return sort(all_words, (a,b)-> a[5] < b[5]);
+		else
+			holder := Array([]);
+			for word in all_words do
+				if not (
+					member([word[1], word[2]+1, word[3], word[4], term_weight(word[1], word[2]+1, word[3], word[4], tolerance)], all_words) or
+					member([word[1]+1, word[2], word[3], word[4], term_weight(word[1]+1, word[2], word[3], word[4], tolerance)], all_words) or
+					member([word[1], word[2]+1, word[3], word[4]+1, term_weight(word[1], word[2]+1, word[3], word[4]+1, tolerance)], all_words)) then
+					holder := array_append(holder, word);
+				fi:
+			od:
+			return sort(holder, (a,b)-> a[3] > b[3]);
+		fi;
+	else
+		return all_words;
+	fi;
+end:
+
+
+
+
+#  /==============================================================\  #
+# /================================================================\ #
+# |			           Expression Construction				       | #
+# \================================================================/ #
+#  \===============================================================/ #
+
+
+trunc_pow := proc(f, n, degree, ps, verbose)
+ 	option remember;
+	local to_return, tttt, powtimeold;
+	global powtime, numthispows, countpowtime;
+	
+	if n = 0 then return 1; fi;
+	if n = 1 then return convert(series(f, z, degree+1), polynom); fi;
+	
+	numthispows := numthispows + 1;
+  	if verbose >= 5 then
+  		printf("Calculating f%a^%a...\n",ps,n);
+  	fi;
+	tttt := time():
+	
+	powtimeold := countpowtime;
+	countpowtime := 0;
+	to_return := convert(series(expand(f*trunc_pow(f,n-1, degree, ps, verbose)), z, degree+1), polynom);
+	countpowtime := powtimeold;
+	
+	if countpowtime = 1 then
+		powtime := powtime + time() - tttt;
+	fi;
+ 	if verbose >= 5 then
+ 		printf("\tdegree %a\t(%g seconds)\n", degree(to_return), time()-tttt);
+ 	fi;
+
+	return to_return;
+end:
+	
+trunc_diff := proc(f, k, verbose)
+ 	option remember;
+	local to_return, tt;
+	global difftime, numthisdiffs;
+	
+	if k = 0 then return f; fi;
+	numthisdiffs := numthisdiffs + 1;
+ 	if verbose >= 5 then
+ 		printf("Calculating f%a...",k);
+ 	fi;
+
+	tt := time():
+	to_return := diff(trunc_diff(f, k-1, verbose), z);
+	difftime := difftime + time() - tt;
+	
+ 	if verbose >= 5 then
+ 		printf("\tdegree %a.\n", degree(to_return));
+ 	fi;
+	return to_return;
+end:
+
+uni_trunc_prod := proc(f, g, deg, verbose)
+	local to_return, tt;
+	global prodtime, numthisprods;
+	
+	if degree(f,z) <> 0 and degree(g,z) <> 0 then
+		numthisprods := numthisprods + 1;
+	fi;
+	tt := time():
+
+ 	if verbose >= 5 then
+ 		printf("\t\t(U) %a * %a = ", degree(f), degree(g));
+ 	fi;
+	to_return := convert(series(expand(f*g), z, deg+1), polynom);
+	
+ 	if verbose >= 5 then
+ 		printf("%a\t\t%g seconds\n", degree(to_return), time()-tt);
+ 	fi;
+	prodtime := prodtime + time() - tt;
+	
+	return to_return;
+end:
+
+trunc_prod := proc(f, g, deg, verbose)
+	local to_return, tt, poly1, poly2, iloop, to_add;
+	global prodtime, numthisprods;
+	
+	if nops(indets(f)) + nops(indets(g)) <= 2 then
+		return uni_trunc_prod(f,g,deg,verbose);
+	fi;
+
+	if degree(f,z) <> 0 and degree(g,z) <> 0 then
+		numthisprods := numthisprods + 1;
+	fi;
+	
+	tt := time():
+ 	if verbose >= 5 then
+ 		printf("\t\t(M) %a * %a = ", degree(f), degree(g));
+ 	fi;
+	
+	to_return := 0;
+	
+	if degree(f) < degree(g) then
+		poly1 := f:
+		poly2 := g:
+	else
+		poly1 := g:
+		poly2 := f:
+	fi;
+	
+	poly1 := [seq(coeff(poly1, z, i), i=0..min(deg, degree(poly1)))]:
+	
+
+	to_return := add(z^(iloop-1) * poly1[iloop] * convert(series(poly2, z, deg+1-(iloop-1)),polynom), iloop=1..nops(poly1)):
+	to_return := convert(series(to_return, z, deg+1), polynom):
+
+ 	if verbose >= 5 then
+ 		printf("%a\t\t%g seconds\n", degree(to_return), time()-tt);
+ 	fi;
+	prodtime := prodtime + time() - tt;
+	
+	return to_return;
+	
+end:
+
+
+is_not_zero := proc(n)
+	if n = 0 then return 0; fi;
+	return 1;
+end:
+
+make_words := proc(m, k, l)
+	if m <= 0 or k < 0 or l <= 0 then return [[seq(0, i=0..k)]]; fi;
+	return [seq(seq([i, op(w)], w=make_words(m-i, k-1, l-is_not_zero(i))), i=0..m)];
+end:
+
+form_expr := proc(known_terms, all_words, d, k, tw, verbose, modsolve)
+	local f, final_expr, iloop, jloop, this_term, toadd, termloop, app, att, kt;
+	app := 0;
+	
+	kt := known_terms;
+	if modsolve <> 0 then
+		kt := kt mod modsolve;
+	fi;
+	f := add(z^(iloop-1)*kt[iloop], iloop=1..min(round_up_hundred(tw), nops(kt)));
+	final_expr := 0;
+	for iloop from 1 to nops(all_words) do
+		this_term := 1;
+		for jloop from 1 to nops(all_words[iloop]) do
+			if all_words[iloop][jloop] <> 0 then
+				this_term := trunc_prod(this_term, trunc_pow(trunc_diff(f, jloop-1, verbose), all_words[iloop][jloop], degree(f), jloop-1, verbose), tw-1, verbose);
+				if modsolve <> 0 then
+					this_term := this_term mod modsolve;
+				fi;
+			fi;
+		od:
+		this_term := trunc_prod(this_term, add(z^kloop*p[iloop, kloop], kloop=0..d), tw-1, verbose);
+		if modsolve <> 0 then
+			this_term := this_term mod modsolve;
+		fi;
+		att := time():
+		app := app + time() - att;
+		final_expr := final_expr + this_term:
+		if modsolve <> 0 then
+			final_expr := final_expr mod modsolve;
+		fi;
+	od:
+	final_expr := convert(series(final_expr, z, tw-k), polynom):
+	return final_expr;
+end:
+
+# input: 
+#  f, polynomial with known terms
+#  p, prime
+#  deg, truncation degree (does not include x^deg)
+#  power_word, list L = [L[1],L[2],..L[k]] to build the term
+#    (f^L[1]) * ((f')*L[2]) * ... * ((f^{k-1})*L[k])
+modp_form_component := proc(f, p, deg, power_word)
+	local component, deriv;
+	
+	# CHANGEBACK
+	component := modp1(ConvertIn(1,x),p);
+	#component := 1;
+	
+	for deriv from 0 to nops(power_word)-1 do
+		if power_word[deriv+1] > 0 then
+			component := modp_mul(component, modp_pow(modp_diff(f, deriv, deg, p), power_word[deriv+1], deg, p), deg, p);
+		fi;
+	od;
+
+	return component;
+end:	
+
+# input: 
+#  f, polynomial with known terms
+#  p, prime
+#  deg, truncation degree (does not include x^deg)
+#  power_words, list of lists L = [L[1],L[2],..L[k]] to build the term
+#    (f^L[1]) * ((f')*L[2]) * ... * ((f^{k-1})*L[k])
+#modp_form_expr := proc(f, p, deg, power_words)
+#	local expr, power_word;
+#	
+#	expr := ConvertIn(0,x);
+#	
+#	for power_word in power_words:
+#		expr := Add(expr, modp_form_component(f, p, def, power_word));
+#	od;
+#
+#	return modp1(expr, p);
+#end:	
+
+
+#  /==============================================================\  #
+# /================================================================\ #
+# |					       Linear Guessing					       | #
+# \================================================================/ #
+#  \===============================================================/ #
+
+make_a_guess := proc(known_terms, m, k, d, l, tol, modsolve, verbose)
+	local all_words, tw, expr, cfs, gcds, iloop, kloop, sols, sol, ok, finalans, solvetime, setuptime, ids, mat_form, numeqs, numvars, MANS, goodsol, lcmofcfs;
+	global solvertime, numthisprods, numthisdiffs, numthispows;
+	
+	tw := term_weight(m, k, d, l, tol);
+	
+	if tw > nops(known_terms) then
+		error sprintf("weight([m=%a, k=%a, d=%a, l=%a, tol=%a]) > # of known terms ( = %a )", m, k, d, l, tol, nops(known_terms));
+	fi;
+	
+	setuptime := time();
+	all_words := make_words(m, k, l);
+	
+	expr := form_expr(known_terms, all_words, d, k, tw, verbose, modsolve);
+	
+	if verbose >= 2 then
+		printf("\tSetup time: %g seconds.", time()-setuptime);
+		if verbose >= 3 then
+			printf("\t (%a pows, %a diffs, %a prods)", numthispows, numthisdiffs, numthisprods);
+		fi;
+		printf("\n");
+	fi;
+	
+	solvetime := time();
+	
+	if verbose >= 5 then
+		printf("\t\tExtracting equations...");
+	fi:
+	
+	cfs := [coeffs(expr,z)]:
+	numeqs := nops(cfs):
+	
+ 	#printf("%a\n%a\n", cfs, numeqs);
+ 	#return cfs;
+	
+	if type(known_terms, list(rational)) then
+		lcmofcfs := lcm(seq(denom(cf¢s[iloop]), iloop=1..numeqs));
+		cfs := [seq(lcmofcfs*cfs[iloop], iloop=1..numeqs)];
+	fi;
+	
+# 	printf("** %a\n", cfs);
+	
+	if verbose >= 5 then
+		printf("\tdone.\n");
+	fi:
+	
+	if verbose >= 5 then
+		printf("\t\tCalculating indets...");
+	fi:
+	ids := indets(cfs);
+	if verbose >= 5 then
+		printf("\tdone.\n");
+	fi:
+		
+	if modsolve = 0 then
+		if type(known_terms, list(rational)) then
+			if verbose >= 5 then
+				printf("\t\tConverting to Matrix form...\t");
+			fi:
+			numvars := nops(ids):
+			mat_form := gen_matrix(cfs, ids, numeqs, numvars):
+			mat_form := convert([seq(convert(mat_form[iloop], list), iloop=1..numeqs)], Matrix):
+			if verbose >= 5 then
+				printf("done.\n\t\tNow passing to IntegerLinearSolve...\t");
+			fi:			
+
+#			printf("%a\n", < mat_form | Vector(numeqs, shape=zero)>);
+			MANS := [LinearAlgebra[Modular][IntegerLinearSolve](< mat_form | Vector(numeqs, shape=zero)>, numvars)];
+			
+#			printf("%a\n", < mat_form | Vector(numeqs, shape=zero)>);
+			
+			if verbose >= 5 then
+				printf("\tdone.\n");
+			fi:
+		
+			goodsol := false;
+			for kloop from 1 to nops(MANS) do
+				if convert(MANS[kloop], set) <> {0} then
+					sols := {seq(ids[iloop]=MANS[kloop][iloop], iloop=1..numvars)}:
+					goodsol := true;
+					break;
+				fi;
+			od:
+		
+			if not goodsol then
+				sols := {}:
+			fi;
+		else		
+			#printf("POLY TIME");
+			#print(cfs);
+	    	sols := SolveTools[Linear](cfs, ids);
+	    fi;
+	    
+# 	    printf("&& %a\n", sols);
+  		
+	else
+		if isprime(modsolve) then
+			if verbose >= 5 then
+				printf("\t\tConverting to Matrix form...\t");
+			fi:
+			numeqs := nops(cfs):
+			numvars := nops(ids):
+			mat_form := gen_matrix(cfs, ids, numeqs, numvars):
+			mat_form := convert([seq(convert(mat_form[iloop], list), iloop=1..numeqs)], Matrix):
+			if verbose >= 5 then
+				printf("done.\n\t\tNow passing to Linsolve...\t");
+			fi:
+		
+#			MANS := Linsolve(mat_form, Vector(numeqs, shape=zero)) mod modsolve;
+
+			MANS := LinearAlgebra[Modular][Mod](modsolve,<mat_form|Vector(numeqs, shape=zero)> , integer[]);
+			
+# 			printf("\nMANS: %a\n",[MANS]);
+			MANS := [LinearAlgebra[Modular][LinearSolve](modsolve, MANS, 1, inplace=false)][-1];
+			
+# 			printf("\nMANS: %a\n",MANS);
+		
+			if verbose >= 5 then
+				printf("done.\n");
+			fi:
+		
+			if convert(MANS, set) <> {0} then
+				sols := {seq(ids[iloop]=MANS[iloop], iloop=1..numvars)}:
+			else
+				sols := {};
+			fi:
+		else
+			sols := msolve({op(cfs)}, modsolve);
+		fi:
+		
+		
+	fi;
+	solvertime := solvertime + time() - solvetime;
+	
+	if verbose >= 2 then
+		printf("\tSolve time: %g seconds.\n", time()-solvetime);
+	fi;
+	
+	ok := false;
+	for sol in sols do
+		if (rhs(sol) <> 0) then
+			ok := true;
+		fi;
+	od;
+  
+	if (ok = false) then
+		return false;
+	fi;
+
+	finalans := subs(sols, [seq(add(p[iloop,jloop]*z^jloop, jloop=0..d), iloop=1..nops(all_words))]);
+	
+	if modsolve = 0 then
+		gcds := finalans[1];
+		for iloop from 2 to nops(finalans) do
+			gcds := gcd(gcds, finalans[iloop]);
+		od;
+	
+		finalans := simplify(map(q -> q/gcds, finalans));
+		
+		
+	fi;
+	
+# 	printf("$$ %a\n", finalans);
+	
+# 	if nops(indets(finalans)) = 0 then
+# 		return false;
+# 	fi;
+	
+	
+	
+	return([finalans, all_words]);
+
+end:
+
+modp_make_a_guess := proc(known_terms, m, k, d, l, tol, p, power, verbose, dropbyatmost:=50)
+#	local all_words, tw, expr, cfs, gcds, iloop, kloop, sols, sol, ok, finalans, solvetime, setuptime, ids, mat_form, numeqs, numvars, MANS, goodsol, lcmofcfs;
+	local tw, setuptime, all_words, f, deg, components, solvetime, P, max_defect, defect, reconstruct;
+	global solvertime, totalsetuptime;#, numthisprods, numthisdiffs, numthispows;
+
+	#printf("called with mmag(%a, %a, %a, %a, %a, %a, %a, %a, %a, %a)\n",known_terms,m,k,d,l,tol,p,power,verbose,dropbyatmost);
+	
+	
+	tw := term_weight(m, k, d, l, tol);
+	
+	if tw > nops(known_terms) then
+		error sprintf("weight([m=%a, k=%a, d=%a, l=%a, tol=%a]) > # of known terms ( = %a )", m, k, d, l, tol, nops(known_terms));
+	fi;
+	
+	setuptime := time();
+	all_words := make_words(m, k, l);
+	if verbose > 0 then printf("\t%a components\t", nops(all_words)); fi;
+	
+	#CHANGEBACK
+	f := modp1(ConvertIn(add(known_terms[i]*x^(i-1),i=1..nops(known_terms)),x),p);
+	deg := modp1(Degree(f),p);
+	#f := add(known_terms[i]*x^(i-1),i=1..nops(known_terms)) mod p;
+	#deg :=degree(f,x);
+	#f := add(known_terms[i]*x^(i-1),i=1..nops(known_terms));
+	#deg :=degree(f,x);
+
+	components := map(aw -> modp_form_component(f, p, deg+1, aw), all_words);
+
+	totalsetuptime := totalsetuptime + time() - setuptime;
+	
+	if verbose >= 2 then
+		printf("\tSetup time: %g seconds.\n", time()-setuptime);
+	fi;
+	
+	solvetime := time();
+	
+	# DO THE BL METHOD, CHECK FOR SUCCESS
+	# return false if no good solution
+	# return [list of coeffs in right order, all words] if there is a good solution
+	
+	P,defect := op(SPHPS_wrapper(components, power, distribute_power(power, nops(components)), p, tol, true, dropbyatmost));
+	#return [P,defect];
+
+	solvertime := solvertime + time() - solvetime;
+	#print(P,defect);
+
+	max_defect := max(defect);
+	if add(`if`(max_defect - other_defect>1, max_defect - other_defect, 0), other_defect=defect) >= tol then
+		return [
+			map(
+				#CHANGEBACK
+				comp -> modp1(ConvertOut(comp,x),p),
+				#comp -> comp,
+				convert(P[select(ind -> defect[ind]=max_defect, [`$`(1..nops(P))])[1]],list)
+			)
+		,all_words];
+	else
+		return false;
+	fi;
+
+end:
+
+
+#  /==============================================================\  #
+# /================================================================\ #
+# |					        Main Routine					       | #
+# \================================================================/ #
+#  \===============================================================/ #
+
+guessfunc := proc(data)
+	local mind, maxd, minm, maxm, mink, maxk, minl, maxl, minweight, maxweight, output, tolerance, skimmod, egf, rev, verbose, modsolve, i, newdata, tt, terms_as_func, rev_series, legal_words, st, donesofar, todo, trial, ws_string, try_to_solve, lsort, pretty_version, resumeat, ret_dat, modp_prime, newdata_modp, new_bl, tts_store;
+	global solvertime, totalsetuptime, powtime, difftime, prodtime, numthisprods, numthispows, numthisdiffs;
+
+	## HACK HACK HACK
+	if data[2..] = [0$(nops(data)-1)] and nops(data) > 10 then
+		return F(z) - data[1];
+	fi;
+
+	## END
+
+	if nargs = 0 then
+		# Print help and quit.
+		printf("\nguessfunc: This procedure is called with a list of coefficients and the following optional arguments:\n\n======================================================\n\n");
+
+		printf("\ttolerance=T : use T extra terms with each guess to verify correctness [default T=10]\n\n");
+		
+		printf("\tverbose=V : print information while running, from V=0 (no info) to V=5 (lots of info) [default V=1]\n\n");
+
+		printf("\tmind=D : guess only ADEs with polynomial coefficients of degree at least D\n");
+		printf("\tmaxd=D : guess only ADEs with polynomial coefficients of degree at most D\n\n");
+
+		printf("\tminm=M : guess only ADEs with minimum product size M\n");
+		printf("\tmaxm=M : guess only ADEs with maximum product size M\n\n");
+
+		printf("\tmink=K : guess only ADEs with the minimum derivative being the Kth derivative\n");
+		printf("\tmaxk=K : guess only ADEs with the maximum derivative being the Kth derivative\n\n");
+
+		printf("\tcheckrestricted : expand the types of guesses to include those with a restricted number of terms in each product [see manual]\n");
+		printf("\tminl=L : guess only ADEs with at most L different terms in each product\n");
+		printf("\tmaxl=L : guess only ADEs with at most L different terms in each product\n\n");
+
+		printf("\tminweight=W : try only guesses requiring at least W terms\n");
+		printf("\tmaxweight=W : try only guesses requiring at most W terms\n\n");
+		
+		printf("\tskimmod=S : try only guesses with polynomial coefficient degree D that is zero mod S\n");
+		printf("\t\talways tries the maximum possible D for each (M,K), regardless of modulus\n");
+		printf("\t\tset S=-1 to only ever try the maximum possible D for each (M,K)\n\n");
+
+		printf("\talgebraic : guess only algebraic equations\n");
+		printf("\t\tnot compatible with minm, maxm, mink, maxk options\n\n");
+
+		printf("\tdfinite : guess only D-finite equations\n");
+		printf("\t\tnot compatible with minm, maxm, mink, maxk options\n\n");
+
+		printf("\tmodsolve=U : look for solutions mod U [experimental, and slower]\n\n");
+		
+		printf("\tresumeat=R : After generating list of potential guess forms, start at the Rth one.\n\t\t[useful to resume a computation with skimmod=-1]\n\n");
+
+		printf("\t======\n\n\tSequences Transformations: these will be applied to the sequence in the order\n\t\tthey are given in the arguments, and can be used multiple times,\n\t\te.g., guessfunc(data, egf, egf) considers the sequence a_n/(n!)^2.\n\n");
+		printf("\t - egf : divides a_n by n!\n\t\te.g., [1,2,3,4] -> [1,2,3/2,2/3]\n");
+		printf("\t - invegf : multiplies a_n by n!\n\t\te.g., [1,2,3,4] -> [1,2,6,24]\n\n");
+		printf("\t - rev : guess the reversion (compositional inverse) of the given terms\n\t\trequires a_0 = 0 and a_1 != 0\n\t\te.g., [0,1,2,3,4] -> [0,1,-2,5,-14]\n\n");		
+		printf("\t - recip : given the coefficients of f, searches for a functional equation for 1/f\n\t\trequires a_0 != 0\n\t\te.g., [1,2,3,4] -> [1,-2,1,0]\n\n");
+		printf("\t - logd : given the coefficients of f, searches for a functional equation for diff(log(f))\n\t\trequires a_0 != 0, note the result has one fewer term\n\t\te.g., [1,2,3,4,5] -> [2,2,2,2]\n");
+		printf("\t - invlogd : given the coefficients of f, searches for a functional equation for exp(int(f))\n\t\tnote the result has an undetermined constant multiplier, automatically set to 1\n\t\te.g., [2,2,2,2] -> [1,2,3,4]\n");
+
+			
+		printf("======================================================\n\n");
+
+		printf("For examples, see the user manual at: [currently non-existant]\n\n");
+		return();
+	fi;
+	
+
+	mind := 1;
+	maxd := nops(data);
+	minm := 1;
+	maxm := nops(data);
+	mink := 0;
+	maxk := nops(data);
+	minl := -1;
+	maxl := nops(data);
+	minweight := 1;
+	maxweight := nops(data);
+	output := "";
+	tolerance := 10;
+	skimmod := 0;
+	verbose := 1;
+	modsolve := 0;
+	resumeat := 1;
+	ret_dat := false;
+	new_bl := true;
+	modp_prime := 7919;
+	newdata := data;
+
+	# Read the optional command line arguments
+	for i from 2 to nargs do
+#		printf("%a\n",args[i]);
+		if type(args[i], `=`) and convert(op(1, args[i]), string) = "prime" then
+			if type(op(2, args[i]), nonnegint) and isprime(op(2,args[i])) then
+				modp_prime := op(2, args[i]);
+				output := cat(output, sprintf("Setting modp_prime to %a\n", modp_prime));
+			else
+				output := cat(output, sprintf("Warning: unable to interpret argument (or not prime!): %a\n", args[i]));
+			fi;
+		elif type(args[i], `=`) and convert(op(1, args[i]), string) = "mind" then
+			if type(op(2, args[i]), nonnegint) then
+				mind := op(2, args[i]);
+				output := cat(output, sprintf("Setting mind to %a\n", mind));
+			else
+				output := cat(output, sprintf("Warning: unable to interpret argument: %a\n", args[i]));
+			fi;
+		elif type(args[i], `=`) and convert(op(1, args[i]), string) = "maxd" then
+			if type(op(2, args[i]), nonnegint) then
+				maxd := op(2, args[i]);
+				output := cat(output, sprintf("Setting maxd to %a\n", maxd));
+			else
+				output := cat(output, sprintf("Warning: unable to interpret argument: %a\n", args[i]));
+			fi;
+		elif type(args[i], `=`) and convert(op(1, args[i]), string) = "minm" then
+			if type(op(2, args[i]), posint) then
+				minm := op(2, args[i]);
+				output := cat(output, sprintf("Setting minm to %a\n", minm));
+			else
+				output := cat(output, sprintf("Warning: unable to interpret argument: %a\n", args[i]));
+			fi;
+		elif type(args[i], `=`) and convert(op(1, args[i]), string) = "maxm" then
+			if type(op(2, args[i]), posint) then
+				maxm := op(2, args[i]);
+				output := cat(output, sprintf("Setting maxm to %a\n", maxm));
+			else
+				output := cat(output, sprintf("Warning: unable to interpret argument: %a\n", args[i]));
+			fi;
+		elif type(args[i], `=`) and convert(op(1, args[i]), string) = "mink" then
+			if type(op(2, args[i]), nonnegint) then
+				mink := op(2, args[i]);
+				output := cat(output, sprintf("Setting mink to %a\n", mink));
+			else
+				output := cat(output, sprintf("Warning: unable to interpret argument: %a\n", args[i]));
+			fi;
+		elif type(args[i], `=`) and convert(op(1, args[i]), string) = "maxk" then
+			if type(op(2, args[i]), nonnegint) then
+				maxk := op(2, args[i]);
+				output := cat(output, sprintf("Setting maxk to %a\n", maxk));
+			else
+				output := cat(output, sprintf("Warning: unable to interpret argument: %a\n", args[i]));
+			fi;
+		elif convert(args[i], string) = "checkrestricted" then
+			output := cat(output, sprintf("Activating <checkrestricted> mode.\n"));
+			minl := 0;
+		elif type(args[i], `=`) and convert(op(1, args[i]), string) = "minl" then
+			if type(op(2, args[i]), posint) then
+				minl := op(2, args[i]);
+				output := cat(output, sprintf("Setting minl to %a\n", minl));
+			else
+				output := cat(output, sprintf("Warning: unable to interpret argument: %a\n", args[i]));
+			fi;
+		elif type(args[i], `=`) and convert(op(1, args[i]), string) = "maxl" then
+			if type(op(2, args[i]), posint) then
+				maxl := op(2, args[i]);
+				if minl = -1 then minl := 0; fi;
+				output := cat(output, sprintf("Setting maxl to %a\n", maxl));
+			else
+				output := cat(output, sprintf("Warning: unable to interpret argument: %a\n", args[i]));
+			fi;
+		elif type(args[i], `=`) and convert(op(1, args[i]), string) = "minweight" then
+			if type(op(2, args[i]), posint) then
+				minweight := op(2, args[i]);
+				output := cat(output, sprintf("Setting minweight to %a\n", minweight));
+			else
+				output := cat(output, sprintf("Warning: unable to interpret argument: %a\n", args[i]));
+			fi;
+		elif type(args[i], `=`) and convert(op(1, args[i]), string) = "maxweight" then
+			if type(op(2, args[i]), posint) then
+				maxweight := op(2, args[i]);
+				output := cat(output, sprintf("Setting maxweight to %a\n", maxweight));
+			else
+				output := cat(output, sprintf("Warning: unable to interpret argument: %a\n", args[i]));
+			fi;
+		elif type(args[i], `=`) and convert(op(1, args[i]), string) = "tolerance" then
+			if type(op(2, args[i]), nonnegint) then
+				tolerance := op(2, args[i]);
+				output := cat(output, sprintf("Setting tolerance to %a\n", tolerance));
+			else
+				output := cat(output, sprintf("Warning: unable to interpret argument: %a\n", args[i]));
+			fi;
+		elif type(args[i], `=`) and convert(op(1, args[i]), string) = "modsolve" then
+			if type(op(2, args[i]), nonnegint) then
+				modsolve := op(2, args[i]);
+				output := cat(output, sprintf("Setting modsolve to %a\n", modsolve));
+			else
+				output := cat(output, sprintf("Warning: unable to interpret argument: %a\n", args[i]));
+			fi;
+		elif type(args[i], `=`) and convert(op(1, args[i]), string) = "verbose" then
+			if type(op(2, args[i]), nonnegint) then
+				verbose := op(2, args[i]);
+				output := cat(output, sprintf("Setting verbose to %a\n", verbose));
+			else
+				output := cat(output, sprintf("Warning: unable to interpret argument: %a\n", args[i]));
+			fi;
+		elif type(args[i], `=`) and convert(op(1, args[i]), string) = "skimmod" then
+			if type(op(2, args[i]), integer) then
+				skimmod := op(2, args[i]);
+				output := cat(output, sprintf("Setting skimmod to %a\n", skimmod));
+			else
+				output := cat(output, sprintf("Warning: unable to interpret argument: %a\n", args[i]));
+			fi;
+		elif type(args[i], `=`) and convert(op(1, args[i]), string) = "resumeat" then
+			if type(op(2, args[i]), posint) then
+				resumeat := op(2, args[i]);
+				output := cat(output, sprintf("Setting resumeat to %a\n", resumeat));
+			else
+				output := cat(output, sprintf("Warning: unable to interpret argument: %a\n", args[i]));
+			fi;
+		elif convert(args[i], string) = "algebraic" then
+			output := cat(output, sprintf("Activating <algebraic> mode.\n"));
+			mink := 0;
+			maxk := 0;
+		elif convert(args[i], string) = "ret_dat" then
+			output := cat(output, sprintf("Activating <ret_dat> mode.\n"));
+			ret_dat := true;
+		elif convert(args[i], string) = "dfinite" then
+			output := cat(output, sprintf("Activating <dfinite> mode.\n"));
+			minm := 1;
+			maxm := 1;
+		elif convert(args[i], string) = "egf" then
+			printf("Applying <egf> transformation.\n");
+			newdata := to_egf(newdata);
+		elif convert(args[i], string) = "invegf" then
+			printf("Applying <invegf> transformation.\n");
+			newdata := to_inv_egf(newdata);
+		elif convert(args[i], string) = "rev" then
+			printf("Applying <rev> transformation.\n");
+			newdata := to_reversion(newdata, verbose);
+		elif convert(args[i], string) = "recip" then
+			printf("Applying <recip> transformation.\n");
+			newdata := to_reciprocal(newdata);
+		elif convert(args[i], string) = "logd" then
+			printf("Applying <logd> transformation.\n");
+			newdata := to_log_diff(newdata);
+		elif convert(args[i], string) = "invlogd" then
+			printf("Applying <invlogd> transformation.\n");
+			newdata := to_inv_log_diff(newdata);
+		elif convert(args[i], string) = "oldschool" then
+			printf("Turning off fancy modular methods.\n");
+			new_bl := false;
+		fi;
+	od;
+
+	if verbose >= 1 then
+		printf("%s",output);
+	fi;
+	
+	if modsolve <> 0 and not type(newdata, list(integer)) then
+		error "Cannot use modsolve unless the sequence contains only integers.";
+	fi;
+
+	if modsolve <> 0 and maxk <> 0 then
+		printf("\nWARNING: Using modsolve while allowing derivatives can lead to trivial functional equations.\n");
+	fi;
+	
+	if skimmod = -1 and maxd <> nops(data) then
+		printf("\nWARNING: Using skimmod = -1 and manually setting maxd doesn't work.\n\tIf resuming a previous computation, use \"resumeat\".\n");
+	fi:
+	
+	if not type(newdata, list(rational)) then
+		printf("\nWARNING: Terms are not rational, so computation will be slow.\n");
+	fi;
+
+	tt := time();
+
+	if verbose >= 1 then
+		if nops(newdata) >= 5000 then
+			printf("\nBuilding guess types (may take ten minutes)... ");
+		elif nops(newdata) >= 2000 then
+			printf("\nBuilding guess types (may take a couple of minutes)... ");
+		elif nops(newdata) >= 1000 then
+			printf("\nBuilding guess types (may take a minute)... ");
+		else
+			printf("\nBuilding guess types... ");
+		fi;
+	fi;
+	
+	legal_words := convert(build_words(min(nops(newdata), maxweight), tolerance, mind, maxd, minm, maxm, mink, maxk, minl, maxl, skimmod),list);
+	
+	if verbose >= 1 then
+		printf("%g seconds.\n\n",time()-tt);
+	fi;
+
+	totalsetuptime := 0:
+	solvertime := 0:
+	powtime := 0:
+	prodtime := 0:
+	difftime := 0:
+	
+	st := time();
+	tt := time();
+
+	donesofar := 1;
+	legal_words := select(lsort -> lsort[5] >= minweight, legal_words);
+	todo := nops(legal_words);
+	
+
+	if new_bl then
+		# first try to do everything modularly
+		# then if a potential modular solution is found, go back to the standard way
+
+		newdata_modp := newdata mod modp_prime;
+
+		#print(newdata_modp);
+		#print(legal_words);
+
+		for trial in legal_words do
+			if donesofar < resumeat then:
+				donesofar := donesofar+1;
+				next;
+			fi;
+			
+			if minl = -1 then
+				ws_string := sprintf("(m=%a, k=%a, d=%a : weight=%a)", trial[1], trial[2], trial[3], trial[5]);
+			else
+				ws_string := sprintf("(m=%a, k=%a, d=%a, l=%a : weight=%a)", trial[1], trial[2], trial[3], trial[4], trial[5]);
+			fi;
+
+			if verbose = 1 then
+				printf("[ %d / %d ]\t%s... ",donesofar, todo, ws_string);
+			elif verbose > 1 then
+				printf("[ %d / %d ]\t%s...\n",donesofar, todo, ws_string);
+			fi;
+			st := time();
+
+			### DO ALL THE MAGIC HERE!! ###
+			#try_to_solve := make_a_guess(newdata, trial[1], trial[2], trial[3], trial[4], tolerance, modsolve, verbose);
+			try_to_solve := modp_make_a_guess(newdata_modp, trial[1], trial[2], trial[3], trial[4], tolerance, modp_prime, trial[5], verbose);
+			#printf("%a\n",[newdata_modp, trial[1], trial[2], trial[3], trial[4], tolerance, modp_prime, trial[5], verbose]);
+			tts_store := try_to_solve;
+			
+			if verbose = 1 then
+				printf("%g seconds.\n", time()-st);
+			elif verbose > 1 then
+				printf("\tTotal time: %g seconds.\n", time()-st);
+			fi;
+			
+			if verbose >= 3 then
+				printf("\n\t~~~~~ Totals ~~~~~\n");
+				printf("\tTime setting up: %g seconds.\n",totalsetuptime);
+				printf("\tTime solving:  %g seconds.\n",solvertime);
+				printf("\t~~~~~~~~~~~~~~~~~~\n\n");
+			fi;
+			
+			donesofar := donesofar + 1;
+			
+			if (try_to_solve <> false) then
+				# detected a possible solution mod p, want to try the full thing now!!
+				
+				if verbose > 0 then printf("\tDetected a possible solution. Solving non-modularly..."); fi;
+
+			#	reconstruct := 
+
+				#lprint(try_to_solve);
+				#print(try_to_solve);
+				#return try_to_solve;
+				st := time():
+				try_to_solve := make_a_guess(newdata, trial[1], trial[2], trial[3], trial[4], tolerance, modsolve, verbose);
+
+				
+			
+				if verbose = 1 then
+					printf("%g seconds.\n", time()-st);
+				elif verbose > 1 then
+					printf("\tTotal time: %g seconds.\n", time()-st);
+				fi;
+				
+				if verbose >= 3 then
+					printf("\n\t~~~~~ Totals ~~~~~\n");
+					printf("\tTime taking powers: %g seconds.\n",powtime);
+					printf("\tTime taking derivs: %g seconds.\n",difftime);
+					printf("\tTime taking prods:  %g seconds.\n",prodtime);
+					printf("\tTime solving sys:  %g seconds.\n",solvertime);
+					printf("\t~~~~~~~~~~~~~~~~~~\n\n");
+				fi;
+
+				if (try_to_solve <> false) then
+					try_to_solve[1] := factor(try_to_solve[1]);
+					try_to_solve[1] := try_to_solve[1]*lcm(seq(denom(X),X=try_to_solve[1]));
+					pretty_version := make_pretty(try_to_solve[1], try_to_solve[2]);
+					
+					if (modsolve = 0 and not simplify(subs(F(z)=1,factor(pretty_version))) = 0) or (modsolve <> 0 and not simplify(subs(F(z)=1,factor(pretty_version)) mod modsolve) = 0) then
+						if verbose >= 1 then
+							printf("\n");
+							printf("Functional equation found! (%g seconds)\n\n",time()-tt);
+						fi;
+						if verbose >= 2 then
+							printf("Time taking powers: %g seconds.\n",powtime);
+							printf("Time taking derivs: %g seconds.\n",difftime);
+							printf("Time taking prods:  %g seconds.\n",prodtime);
+							printf("Time solving sys:  %g seconds.\n\n",solvertime);
+						fi;
+						if modsolve <> 0 then
+							print("now I'm here: %a\n",modsolve);
+							return sub_vals(pretty_version, 1);
+						else
+							if ret_dat then
+								return [sub_vals(pretty_version, 1), trial];
+							else
+								return sub_vals(pretty_version, 1);
+							fi;
+						fi;
+					fi;
+				else
+					if verbose > 0 then printf("\tdid not complete to a full solution.\n"); fi;
+					#print(tts_store);
+					#return tts_store[1];
+					#error "Found a modular solution that did not lead to a full one. Weird?";
+				fi;
+
+
+			fi;
+		od;
+
+	else
+		for trial in legal_words do
+			if donesofar < resumeat then:
+				donesofar := donesofar+1;
+				next;
+			fi;
+			
+			if minl = -1 then
+				ws_string := sprintf("(m=%a, k=%a, d=%a : weight=%a)", trial[1], trial[2], trial[3], trial[5]);
+			else
+				ws_string := sprintf("(m=%a, k=%a, d=%a, l=%a : weight=%a)", trial[1], trial[2], trial[3], trial[4], trial[5]);
+			fi;
+
+			if verbose = 1 then
+				printf("[ %d / %d ]\t%s... ",donesofar, todo, ws_string);
+			elif verbose > 1 then
+				printf("[ %d / %d ]\t%s...\n",donesofar, todo, ws_string);
+			fi;
+			st := time();
+			
+			try_to_solve := make_a_guess(newdata, trial[1], trial[2], trial[3], trial[4], tolerance, modsolve, verbose);
+			#return try_to_solve;
+
+			if verbose = 1 then
+				printf("%g seconds.\n", time()-st);
+			elif verbose > 1 then
+				printf("\tTotal time: %g seconds.\n", time()-st);
+			fi;
+			
+			if verbose >= 3 then
+				printf("\n\t~~~~~ Totals ~~~~~\n");
+				printf("\tTime taking powers: %g seconds.\n",powtime);
+				printf("\tTime taking derivs: %g seconds.\n",difftime);
+				printf("\tTime taking prods:  %g seconds.\n",prodtime);
+				printf("\tTime solving sys:  %g seconds.\n",solvertime);
+				printf("\t~~~~~~~~~~~~~~~~~~\n\n");
+			fi;
+			
+			
+			donesofar := donesofar + 1;
+			numthispows := 0;
+			numthisdiffs := 0;
+			numthisprods := 0;
+			
+			if (try_to_solve <> false) then
+				try_to_solve[1] := try_to_solve[1]*lcm(seq(denom(X),X=try_to_solve[1]));
+				pretty_version := make_pretty(try_to_solve[1], try_to_solve[2]);
+				
+				if (modsolve = 0 and not simplify(subs(F(z)=1,factor(pretty_version))) = 0) or (modsolve <> 0 and not simplify(subs(F(z)=1,factor(pretty_version)) mod modsolve) = 0) then
+					if verbose >= 1 then
+						printf("\n");
+						printf("Functional equation found! (%g seconds)\n\n",time()-tt);
+					fi;
+					if verbose >= 2 then
+						printf("Time taking powers: %g seconds.\n",powtime);
+						printf("Time taking derivs: %g seconds.\n",difftime);
+						printf("Time taking prods:  %g seconds.\n",prodtime);
+						printf("Time solving sys:  %g seconds.\n\n",solvertime);
+					fi;
+					if modsolve <> 0 then
+						return sub_vals(pretty_version, 1);
+					else
+						if ret_dat then
+							return [pretty_version, trial];
+						else
+							return pretty_version;
+						fi;
+					fi;
+				fi;
+			fi;
+		od;
+	fi;
+
+	if verbose >= 1 then
+		printf("No functional equation found. (%g seconds)\n\n",time()-tt);
+	fi;
+	return false;
+end:
+
+
+#  /==============================================================\  #
+# /================================================================\ #
+# |					         Misc Tools  					       | #
+# \================================================================/ #
+#  \===============================================================/ #
+
+var_term := proc(word)
+	local ans, l;
+	
+	ans := 1;
+	
+	for l from 1 to nops(word) do
+		if word[l] > 0 then
+			if l = 1 then
+				ans := ans * F(z)^(word[l]);
+			else
+				ans := ans * diff(F(z), z$(l-1))^(word[l]);
+			fi;
+		fi;
+	od;
+
+	return ans;
+end:
+
+make_pretty := proc(sol, ws)
+	local iloop, ans;
+	
+	return add(sol[iloop]*var_term(ws[iloop]), iloop=1..nops(ws));
+  
+end:
+
+sub_vals := proc(ans_polys, sub_value)
+	local leftover_vars, answer_poly_vars;
+	
+ 	leftover_vars := {op(indets(ans_polys))} minus {z};
+ 	leftover_vars := remove(type,leftover_vars,'function');
+
+ 	#printf("leftover: %a\n",leftover_vars);
+
+ 	 	
+ 	if nops(leftover_vars) > 0 then
+ 		answer_poly_vars := subs({seq(leftover_vars[iloop] = sub_value, iloop = 1 .. nops(leftover_vars))}, ans_polys);
+ 	else
+ 		answer_poly_vars := ans_polys;
+ 	fi;
+ 	
+ 	return answer_poly_vars;
+ end:
+
+#  /==============================================================\  #
+# /================================================================\ #
+# |			          Sequence Transformations				       | #
+# \================================================================/ #
+#  \===============================================================/ #
+
+function_to_coeffs := proc(f, z, deg)
+	return [seq(coeff(f,z,i),i=0..deg)];
+end:
+
+transform_list := proc(L, lam)
+	return [seq(lam(L[i], i-1), i=1..nops(L))]:
+end:
+
+to_egf := proc(L)
+	return transform_list(L, (a,n)->a/factorial(n));
+end:
+
+to_inv_egf := proc(L)
+	return transform_list(L, (a,n)->a*factorial(n));
+end:
+
+to_reversion := proc(L, verbose)
+	local f, i, to_return, this_pow, f_recip;
+	
+	if L[1] <> 0 or L[2] = 0 then
+		error "Cannot compute reversion unless a_0 = 0 and a_1 != 0.";
+	fi;
+	
+	f := add(L[i]*z^(i-1),i=1..nops(L)):
+
+	if verbose >= 5 then
+		printf("\tReversion: first calculating series of 1/f (used for auxiliary calculations).\n");
+	fi;
+	f_recip := convert(series(f^(-1), z, nops(L)+10), polynom);
+
+	to_return := Array([]);
+	to_return := array_append(to_return, 0);
+
+	this_pow := 1;
+
+	for i from 1 to nops(L)-1 do
+		this_pow := trunc_prod(this_pow, f_recip, nops(L)+10, verbose-5);
+		to_return := array_append(to_return , coeff(this_pow,z,-1)/i);
+		if verbose >= 5 then
+			printf("\t\treversion calculation: [%a / %a]\n", i, nops(L)-2);
+		fi;
+	od:
+
+	return convert(to_return,list);
+  	
+end:
+
+to_reciprocal := proc(L)
+	local f, to_return;
+
+	if L[1] = 0 then
+		error "Cannot compute reciprocal unless a_0 != 0";
+	fi;
+
+	f := add(L[i]*z^(i-1), i=1..nops(L));
+	to_return := convert(series(1/f, z, nops(L)), polynom);
+
+	return [seq(coeff(to_return,z,i),i=0..nops(L)-1)];
+end:
+
+to_log_diff := proc(L)
+	local f, to_return;
+
+	if L[1] = 0 then
+		error "Cannot compute logarithmic derivative unless a_0 != 0";
+	fi;
+
+	f := add(L[i]*z^(i-1), i=1..nops(L));
+	to_return := convert(series(diff(f,z)/f, z, nops(L)+3), polynom);
+
+	return [seq(coeff(to_return,z,i),i=0..nops(L)-2)];
+end:
+
+to_inv_log_diff := proc(L)
+	local f, to_return;
+
+	f := add(L[i]*z^(i-1), i=1..nops(L));
+	to_return := convert(series(exp(int(f,z)), z, nops(L)+3), polynom);
+
+	return [seq(coeff(to_return,z,i),i=0..nops(L)-1)];
+end:
+
+
+
+#  /==============================================================\  #
+# /================================================================\ #
+# |					      Helper Methods					       | #
+# \================================================================/ #
+#  \===============================================================/ #
+ 
+array_append := proc(Arr, item)
+	local new_array;
+	new_array := Array(Arr);
+	new_array(ArrayTools[NumElems](new_array)+1) := item;
+	return new_array;
+end:
+
+round_up_hundred := proc(n)
+	return 100*ceil(n/100.0);
+end:
+
+one_if_one := proc(n)
+	if n = 1 then return 1; else return 0; fi;
+end:
+
+gen_matrix := proc(eqs, vars, numeqs, numvars)
+	local A, iloop, this_eq, term, split_term;
+	A := Array([]);
+	for iloop from 1 to numeqs do
+		A := array_append(A, Array([seq(0,i=1..numvars)]));
+		
+		if nops(indets(eqs[iloop])) <= 1 then
+			this_eq := [eqs[iloop]];
+		else
+			this_eq := [op(eqs[iloop])]:
+		fi;
+		
+		for term in this_eq do
+			split_term := [op(term)]:
+			if nops(indets(split_term)) = 0 then
+				split_term := [1, term];
+			fi;
+			A[iloop][Search(split_term[2], vars)] := split_term[1];
+		od:
+	od:
+	
+	return A;
+end:

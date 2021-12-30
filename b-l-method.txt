@@ -1,0 +1,532 @@
+#   profile(modp1, constant_term_mod, modp_truncate, modp_pow, modp_diff, modp_mul, modp_matrix_times_vector, modp_dot_product, modp_matrix_multiplication, hash, distribute_power, SPHPS_wrapper, SPHPS, LinearAlgebra[Modular][Mod], LinearAlgebra[Modular][Multiply]);
+#   profile(modp1, constant_term_mod, modp_truncate, modp_pow, modp_diff, modp_mul, modp_matrix_times_vector, modp_matrix_multiplication, hash, distribute_power, SPHPS_wrapper, SPHPS, LinearAlgebra[Modular][Mod], LinearAlgebra[Modular][Multiply]);
+
+# created May 21, 2018
+# method roughly from Beckermann and Labahn (1994)
+
+# TODO
+#   test which way to get the constant term is faster
+#     1) evaluate at 0
+#     2) take remainder of quotient with x
+#     3) use Coeff
+#    (change in function AND in the matrix base case)
+#
+#   test the same for truncations in general
+#  
+#   test memoization of onemodp, zeromodp, xmodp, and identity matrix
+
+
+global memo_table := Table():
+global mmt := 0:
+global mmtr := 0:
+global mmtdp := 0:
+global mmtrdp := 0:
+
+
+#  /==============================================================\  #
+# /================================================================\ #
+# |			           Expression Construction				       | #
+# \================================================================/ #
+#  \===============================================================/ #
+
+# assumes poly is a modp1 object
+constant_term_mod := proc(poly,p, uneval := false)
+#	printf("constant_term_mod(%a, %a)\n", poly, p);
+    if uneval then
+        return ConvertIn(Coeff(poly,0),x);
+    else
+        return modp1(ConvertIn(Coeff(poly,0),x),p);
+    fi;
+end:
+
+# returns the truncation of poly up to but EXCLUDING the x^deg term.
+modp_truncate := proc(poly,deg,p, uneval := false)
+#	printf("modp_truncate(%a, %a, %a)\n", poly, deg, p);
+    if uneval then
+        return Rem(poly,ConvertIn(x^deg,x));
+    else
+	   return modp1(Rem(poly,ConvertIn(x^deg,x)),p);
+    fi;
+end:
+
+# computes f^n up to but EXCLUDING the x^deg term, mod p
+modp_pow := proc(f,n,deg,p, uneval := false)
+	option remember;
+    if n = 0 then
+        if uneval then
+            return ConvertIn(1,x);
+        else
+            return modp1(ConvertIn(1,x),p);
+        fi;
+    fi;
+	if n = 1 then return f; fi;
+    if uneval then
+        return Rem(Multiply(f, modp_pow(f,n-1,deg,p,uneval)),ConvertIn(x^deg,x));
+    else
+    	return modp1(Rem(Multiply(f, modp_pow(f,n-1,deg,p)),ConvertIn(x^deg,x)),p);
+    fi;
+end:
+
+# computes (d/dx)^n of f up to but EXCLUDING the x^deg term, mod p
+modp_diff := proc(f,n,deg,p, uneval := false)
+	option remember;
+	if n = 0 then return f; fi;
+    if uneval then
+        return Rem(Diff(modp_diff(f,n-1,deg,p,uneval)),ConvertIn(x^deg,x));
+    else
+    	return modp1(Rem(Diff(modp_diff(f,n-1,deg,p)),ConvertIn(x^deg,x)),p);
+    fi;
+end:
+
+# computes f*g up to but EXCLUDING the x^deg term, mod p
+modp_mul := proc(f,g,deg,p, uneval := false)
+    if uneval then
+        return Rem(Multiply(f,g),ConvertIn(x^deg,x));
+    else
+    	return modp1(Rem(Multiply(f,g),ConvertIn(x^deg,x)),p);
+    fi;
+end:
+
+#  /==============================================================\  #
+# /================================================================\ #
+# |			            modp1 Helper Methods				       | #
+# \================================================================/ #
+#  \===============================================================/ #
+
+NEW_modp_matrix_times_vector := proc(P, v, p)
+	local toret, tt, ttr;
+	global mmt, mmtr, mmtdp, mmtrdp;
+
+	tt := time():
+	ttr := time[real]():
+
+	toret := modp_matrix_multiplication(P, [seq([v_elem], v_elem=v)], p):
+
+	mmtdp := mmtdp + time() - tt;
+    mmtrdp := mmtrdp + time[real]() - ttr;
+    return map(op,toret);
+end:
+
+modp_matrix_times_vector := proc(P, v, p, uneval := false)
+	local ind;
+#	print([P,v]);
+#	print([seq(modp_dot_product(convert(P[ind],list), v, p), ind=1..nops(v))]);
+#	printf("modp_matrix_times_vector(%a, %a, %a)\n", P, v, p);
+	return [seq(modp_dot_product(P[ind], v, p, uneval), ind=1..nops(v))];
+end:
+
+#modp_dot_product := proc(u, v, p)
+#	local toret, tt, ttr;
+#	global mmt, mmtr, mmtdp, mmtrdp;
+#
+#	tt := time():
+#	ttr := time[real]();
+#
+#	toret := modp_matrix_multiplication([u], [seq([v_elem], v_elem=v)], p):
+#
+#	mmtdp := mmtdp + time() - tt;
+#    mmtrdp := mmtrdp + time[real]() - ttr;
+#    return toret[1][1];
+#end:
+
+modp_dot_product := proc(u, v, p, uneval := false)
+    #option remember;
+	local ind, toret,tt, ttr;
+    global mmtdp, mmtrdp;
+#	printf("modp_dot_product(%a, %a, %a)\n", u, v, p);
+#    printf("max deg: %a\n", max(seq(modp1(Degree(uu),p),uu=u),seq(modp1(Degree(vv),p),vv=v)));
+#    printf("%a\t\t%a\n",u,v);
+    if uneval then
+        return Add(seq(Multiply(u[ind],v[ind]), ind=1..nops(u)));
+    else
+        tt := time():
+        ttr := time[real]();
+        #print(u, v);
+        toret :=  modp1(Add(seq(Multiply(u[ind],v[ind]), ind=1..nops(u))),p);
+        mmtdp := mmtdp + time() - tt;
+        mmtrdp := mmtrdp + time[real]() - ttr;
+        return toret;
+    fi;
+end:
+
+matrix_master := proc(M,N,p)
+
+end:
+
+NEW_modp_matrix_multiplication := proc(M,N,p)
+	global mmt, mmtr;
+
+	local m_deg, n_deg, ans_deg, ans_num_rows, ans_num_cols, tt, ttr, products, rg, access;
+
+	tt := time():
+    ttr := time[real]();
+
+	ans_num_rows := nops(M);
+	ans_num_cols := nops(N[1]);
+
+	#print(ans_num_rows, ans_num_cols);
+
+	m_deg := max(map(nops~,M)) - 1;
+	n_deg := max(map(nops~,N)) - 1;
+	ans_deg := m_deg + n_deg;
+
+	# Convert M and N using LinearAlgebra[Modular][Mod]
+	# TODO: (C_order or Fortran_order?) Maybe M in one, N in the other!
+	#  evaluating at different points
+	# TODO: test sparse or not! -- some quick tests show that using 'sparse' can add significant time
+	# Multiply with LinearAlgebra[Modular][Multiply]
+	# Interp
+
+	products := [seq(LinearAlgebra[Modular][Multiply](p, LinearAlgebra[Modular][Mod](p, M, x=eval_pt, integer[]), LinearAlgebra[Modular][Mod](p, N, x=eval_pt, integer[]), 'sparse'), eval_pt=0..ans_deg)]:
+
+	#return products;
+
+	mmt := mmt + time() - tt;
+    mmtr := mmtr + time[real]() - ttr;
+
+    rg := [`$`(0..ans_deg)];
+
+    access := [seq([seq([seq(products[iloop+1][row,col],iloop=0..ans_deg)], col=1..ans_num_cols)], row=1..ans_num_rows)]:
+    return [seq([seq(modp1(Interp(rg, access[row][col], x),7919), col=1..ans_num_cols)], row=1..ans_num_rows)];
+
+
+
+	return [seq([seq(modp1(Interp(rg, [seq(products[iloop+1][row,col], iloop=0..ans_deg)], x), p), col=1..ans_num_cols)], row=1..ans_num_rows)];
+
+end:
+
+modp_matrix_multiplication := proc(M, N, p, uneval := false)
+#	printf("modp_matrix_multiplication(%a, %a, %a)\n", M, N, p);
+    global mmt,mmtr;
+    local result, MM, NN ,XX, ZZ,zdeg,mdeg,ndeg,tt,ttr,tt1,tt2,tt3,tt4;
+
+
+    #printf("\nmmm in");
+    #result := Matrix(LinearAlgebra[Dimension](M), (i,j) -> modp_dot_product(convert(M[i], list), convert(N[1..,j], list), p));
+    tt := time():
+    ttr := time[real]();
+    tt1 := time(): 
+    MM := Matrix(M);
+    NN := Matrix(N);
+    tt1 := time() - tt1;
+
+    #ZZ := Matrix(nops(M),nops(M)):
+    #tt := time(): 
+    #result := matmultmodp(p, MM, NN, ZZ, x);
+    #ZZ := map(XX -> modp1(ConvertIn(XX,x),p), ZZ):
+    #mmt := mmt + time() - tt;
+    #return result;
+
+
+
+    tt2 := time():
+    MM := map(XX -> modp1(ConvertOut(XX,x),p), MM);
+    NN := map(XX -> modp1(ConvertOut(XX,x),p), NN);
+    tt2 := time()-tt2;
+    #printf("\tdone.\n");
+
+    mdeg := max(map(degree, MM)):
+    ndeg := max(map(degree, NN)):
+    zdeg := mdeg+ndeg;
+
+    #print(MM,NN);
+
+    #printf("\tmultiplying...");
+    #ZZ := MM.NN mod p;
+    
+    tt3 := time():
+    ZZ := map(expand,(MM.NN)) mod p;
+    tt3 := time()-tt3;
+    
+    #printf("convertin");
+    tt4 := time():
+    ZZ := map(XX -> modp1(ConvertIn(XX,x),p), ZZ):
+    result := convert(ZZ, list, nested=true);
+    tt4 := time() - tt4;
+
+    #if time()-tt > 1 then
+    #    printf("\n\n\nMM := %a:\n\nNN := %a:\n\n", MM,NN);
+    #fi;
+    if tt1 + tt2 + tt3 + tt4> 0.1 then
+        #printf("\t%a * %a = %a \t (%a,%a,%a,%a) seconds\n", mdeg, ndeg, zdeg, tt1, tt2, tt3, tt4);
+        #printf("\t\t%a\n\t\t%a\n\t\t%a\n\n", MM[1,1], NN[1,1], ZZ[1,1]);
+        #if tt1 + tt2 + tt3 + tt4 > 2 then
+        #    printf("\n\n\nMM := %a:\n\nNN := %a:\n\nZZ := %a:\n\n", MM,NN,ZZ); 
+        #fi;
+    fi;
+   
+   mmt := mmt + time() - tt;
+   mmtr := mmtr + time[real]() - ttr;
+    return result;
+
+
+    #result := [seq(
+    #        [seq(
+    #            #modp_dot_product(M[iloop], map(row -> row[jloop], N), p)
+    #            modp_dot_product(M[iloop], [seq(row[jloop],row=N)], p, uneval)
+    #        , jloop=1..nops(M))]
+    #    , iloop=1..nops(M))];
+    #printf("\nmmm out\n");
+    #return result;
+end:
+
+
+
+#  /==============================================================\  #
+# /================================================================\ #
+# |			           Other Helper Methods 				       | #
+# \================================================================/ #
+#  \===============================================================/ #
+
+hash := proc(F)
+    local hashes;
+
+    #printf("hashing: [%a, %a, stuff]\n", power, p);
+	hashes := [seq(StringTools[Hash](convert(poly,string)),poly=F)];
+	return StringTools[Hash](StringTools[Join](hashes,""));
+end:
+
+
+# input: power, num_components
+# output: a list where each entry is either floor(power/num_components) or
+#    floor(power/num_components) + 1 so that the entries add up to power
+#  example: distribute_power(15, 4) = [4, 4, 4, 3]
+distribute_power := proc(power, num_components)
+    local oldmod, toret;
+    oldmod := `mod`;
+    `mod` := modp;
+	toret := [floor(power/num_components)$num_components] + [1$(power mod num_components), 0$(num_components - (power mod num_components))];
+    `mod` := oldmod;
+    return toret;
+end:
+
+# mimic python's 'all', including short circuiting
+#python_all := proc(func, items)
+#	local item; 
+#    for item in items do
+#      if not func(item) then return false; fi;
+#    od:
+#    return true;
+#end:
+
+
+#  /==============================================================\  #
+# /================================================================\ #
+# |			         Pade-Hermite Approximants 				       | #
+# \================================================================/ #
+#  \===============================================================/ #
+
+SPHPS_wrapper := proc(components, power, n, p, tolerance:= 10, shortcircuit := true, dropbyatmost := 50, knownhash := -1)
+	# MEMOIZE STUFF!!
+	global memo_table;
+	local FF, component_hash, memo_power, memo_P, memo_d, result, headstart;
+
+	if type(components[1], modp1) then
+		FF := components;
+	else
+		FF := map(modp1, map(ConvertIn,components,x), p);
+	fi;
+
+    
+
+    #print("done converting");
+	
+	if knownhash = -1 then
+		component_hash := hash(FF);
+	else
+		component_hash := knownhash;
+	fi;
+
+    FF := map(modp_truncate, FF, power+tolerance, p);
+
+    #printf("(%a, %a)\n",power,n);
+
+#    printf("ch: %a", component_hash);
+
+	if assigned(memo_table[component_hash]) then
+		memo_power, memo_P, memo_d := op(memo_table[component_hash]);
+		headstart := [memo_power, memo_P, memo_d];
+        #printf("\n\tUsing headstart with power=%a for this run of power=%a\n", memo_power, power);
+		result := SPHPS(FF, power, n, p, tolerance, shortcircuit, dropbyatmost, headstart);
+		if power >= memo_power then
+			memo_table[component_hash] := [power, result[1], result[2]];
+		fi;
+	else
+		result := SPHPS(FF, power, n, p, tolerance, shortcircuit, dropbyatmost, []);
+		memo_table[component_hash] := [power, result[1], result[2]];
+	fi;
+
+
+	return result;
+end:
+
+#  main Pade-Hermite builder, with modp
+#
+#  inputs:
+#    F, list of components
+#      assumes they are already converted to modp1
+#    power, amount of terms to use in guessing
+#    n, initially, list of max degrees for each component, later, the defect
+#    tolerance, amount of additional correctness required before shortcircuiting
+#    dropbyatmost, how much to decrease total guessing power by in each recursive call
+#    headstart, [power, P, d]
+#
+#  output:
+#	[P,n], where
+#	P: matrix of Pade-Hermite approximants
+#	n: defect
+SPHPS := proc(F, power, n, p, tolerance:= 10, shortcircuit := true, dropbyatmost := 50, headstart := [])
+    local onemodp, zeromodp, negonemodp, xmodp,  n_sort_permutation, index, FF, m, identmodp, const, to_ret_P, F1, F2, P1, P2, P3, d1, d2, d3, max_defect, power1, power2;
+
+    if dropbyatmost * 1000 < power then
+    	error "Likely to hit recursion limit if power / dropbyatmost > 1000 :(";
+    fi;
+
+   #printf("(%a, %a)\n",power,n);
+
+    m := nops(n):
+
+    onemodp := modp1(Constant(1,x),p);
+   	negonemodp := modp1(Constant(-1,x),p);
+    zeromodp := modp1(Constant(0,x),p);
+    xmodp := modp1(ConvertIn(x,x),p);
+    
+    FF := F; # remenant of old code, but better to do this then to rename all the FFs
+    
+
+    
+    #printf("finished initial set\n");
+
+    if (power <= 0(*) and kappa >= 1*)) then
+        #identmodp := Matrix(m, {seq((i,i)=onemodp,i=1..m)},fill=zeromodp);
+        identmodp := [seq([seq(`if`(iloop=jloop, onemodp, zeromodp), jloop=1..m)], iloop=1..m)];
+        printf("[!!]DON'T WANT TO BE HERE[!!]");
+#        printf("returning:\n");
+#        print([identmodp, n]);
+        return [identmodp, n];
+    fi:
+
+    # python_all(f -> constant_term_mod(f,p), FF))
+    if power = 1 (*and kappa = 1*) then
+        # the permutation that reverse-sorts n
+        n_sort_permutation := ListTools[Reverse](sort(n, output=permutation)):
+#        print([n, n_sort_permutation]);
+        for index in n_sort_permutation do
+            const := constant_term_mod(FF[index],p);
+            if not const = zeromodp then
+#                printf("%a, %a\n", FF,const);
+                #to_ret_P := Matrix(m,
+                #	{
+                #		seq((i,i)=`if`(i=index, xmodp, onemodp),i=1..m),
+                #		seq((i,index)=`if`(i=index, xmodp, modp1(Multiply(negonemodp, Quo(ConvertIn(Coeff(FF[i],0),x),const)),p)),i=1..m)
+                #	}, fill=zeromodp):
+
+                to_ret_P := [seq(
+                    [seq(
+                        `if`(iloop=index and jloop=index,
+                            xmodp, 
+                            `if`(
+                                iloop=jloop,
+                                onemodp,
+                                `if`(
+                                    jloop=index,
+                                    modp1(Multiply(negonemodp, Quo(ConvertIn(Coeff(FF[iloop],0),x),const)),p),
+                                    #Multiply(negonemodp, Quo(ConvertIn(Coeff(FF[iloop],0),x),const)),
+                                    zeromodp
+                                )
+                            )
+                        )
+                    , jloop=1..m)]
+                , iloop=1..m)];
+#                printf("returning:\n");
+#		        print([to_ret_P, n - [0$(index-1),1,0$(m-index)]]);
+                return [to_ret_P, n - [0$(index-1),1,0$(m-index)]];
+            fi:
+        od:
+
+        # if we got here, f(0) = 0 for all f in F so return (I,n)
+        #identmodp := Matrix(m, {seq((i,i)=onemodp,i=1..m)},fill=zeromodp);
+        identmodp := [seq([seq(`if`(iloop=jloop, onemodp, zeromodp), jloop=1..m)], iloop=1..m)];
+#        printf("returning:\n");
+#        print([identmodp, n]);
+        return [identmodp, n];
+    fi;
+
+    # now for the main stuff
+    if power > 1(*) and kappa > 1*) then
+
+    	# run on the first half of the problem!
+    	#kappa_bar := min(sigma,max(ceil(kappa/2),kappa-dropbyatmost));
+    	#sigma_bar := min(sigma, kappa_bar);
+
+    	if nops(headstart) > 0 then
+    		power1 := headstart[1];
+    		power2 := power - power1;
+    		P1 := headstart[2];
+    		#d1 := headstart[3];
+            d1 := distribute_power(power,m) - distribute_power(power1,m) + headstart[3];
+    		if power1 >= power then
+    			return [P1, d1];
+    		fi;
+    	else
+	    	power1 := `if`(power <= dropbyatmost, `if`(power > ceil(dropbyatmost/2), ceil(dropbyatmost/2), max(ceil(power/2))), floor((power-1)/dropbyatmost)*dropbyatmost);
+            #power1 := `if`(power <= dropbyatmost, `if`(power > ceil(dropbyatmost/2), ceil(dropbyatmost/2), max(ceil(power/2))), ceil(power/2));
+	    	power2 := power - power1;
+	    	#printf("%a -> [%a, %a]\n", power, power1, power2);
+
+	    	F1 := map(ft -> modp_truncate(ft, power1, p), FF);
+
+	#    	printf("SPHPS(%a, %a ,%a, %a, %a)\n", F1, sigma_bar, kappa_bar, n, p);
+	    	P1, d1 := op(SPHPS(F1, power1, n, p, tolerance, shortcircuit, dropbyatmost));
+	    fi;
+
+    	#pos,neg := selectremove(tt -> tt >= 0, d1);
+    	#printf("\t%a, %a\n",neg,pos);
+    	#if nops(pos) > 0 and add(ind,ind=neg) < (-1)*tolerance then
+    	max_defect := max(d1);
+    	if add(`if`(max_defect - other_defect>1, max_defect - other_defect, 0), other_defect=d1) >= tolerance then
+    		#print("SHORTCIRCUIT!");
+    		return [P1,d1];
+    	fi;
+
+    	# now fold this in and run on the second half of the problem
+    	# need to set F2 = P1 * F * x^(-kappa)
+    	F2 := map(ft -> modp_truncate(Quo(ft,ConvertIn(x^power1,x)),power2,p), modp_matrix_times_vector(P1, FF, p, false));
+#    	printf("SPHPS(%a, %a ,%a, %a, %a)\n", F2, sigma - sigma_bar, kappa_bar, d1, p);
+    	P2, d2 := op(SPHPS(F2, power2, d1, p, tolerance, shortcircuit, dropbyatmost));
+
+    	# recombine the two parts
+#    	print([P2, "*", P1]);
+        #printf("calling with (p1,p2) = (%a,%a)\n", power1, power2);
+    	P3 := modp_matrix_multiplication(P2, P1, p, false);
+#    	print([P3, "=", P2, "*", P1]);
+#    	printf("returning:\n");
+#        print([P3, d2]);
+#		printf("%a -> %a\n",n, d2);
+    	return [P3, d2];
+    fi;
+
+    return [-1, power1, power2];
+end:
+
+(*
+#read "/Users/jaypantone/Dropbox/Research/Active/2015-28-Chord-Diagrams/MinLengthChordDiagrams/build/classes/minlengthchorddiagrams/Min-Length-6--5000-terms.txt";
+read "/home/jay/chord-diagrams/Min-Length-6--5000-terms.txt";
+f := add(L[i]*x^(i-1),i=1..nops(L)):
+test := [1, seq(diff(f,[x$i]),i=0..10)]:
+
+tt := time[real](): ans := SPHPS_wrapper(map(modp1, map(ConvertIn,test,x), 7919), 997, [200$12], 7919, 10, true, 50): time[real]() - tt;
+#ABC := map(t -> modp1(ConvertOut(t,x),7919), ans[1][1]):
+XYZ := seq(ldegree(expand(add(test[i]*map(t -> modp1(ConvertOut(t,x),7919), ans[1][j])[i] mod 7919,i=1..nops(test))) mod 7919,x),j=1..12);
+
+
+
+#cata := add(binomial(2*n,n)/(n+1)*x^n,n=0..100);
+#test := [1, cata, convert(series(cata^2,x,101),polynom)];
+#SPHPS(test, 4, 4, [1,1,1], 7919);
+
+#map(t -> modp1(ConvertOut(t,x),7919), %);
+#SPHPS(test, 5, 8, [1,1,1], 7919);
+*)
+
+
